@@ -13,7 +13,8 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'URL is required' });
   }
 
-  const cmd = `./yt-dlp -f bestvideo+bestaudio --merge-output-format mp4 -o videos/sample.mp4 ${url}`;
+  cconst cmd = `./yt-dlp -v -f bestvideo+bestaudio --merge-output-format mp4 -o videos/sample.mp4 ${url}`;
+
 
   exec(cmd, (err, stdout, stderr) => {
     if (err) {
