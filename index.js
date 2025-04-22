@@ -17,9 +17,10 @@ app.post('/download', (req, res) => {
 
   exec(cmd, (err, stdout, stderr) => {
     if (err) {
-      console.error(stderr);
-      return res.status(500).json({ error: 'Failed to download video' });
-    }
+  console.error(stderr);
+  return res.status(500).json({ error: stderr });
+}
+
     console.log(stdout);
     return res.json({ success: true, videoUrl: '/videos/sample.mp4' });
   });
