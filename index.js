@@ -8,7 +8,13 @@ const cors = require('cors');
 
 app.use(cors()); // CORS対応
 app.use(bodyParser.json());
-app.use('/videos', express.static('videos'));
+app.use('/videos', express.static('videos', {
+  setHeaders: (res, path) => {
+    if (path.endsWith('.mp4')) {
+      res.set('Content-Type', 'video/mp4');
+    }
+  }
+}));
 
 app.post('/download', (req, res) => {
   const { url } = req.body;
@@ -20,7 +26,7 @@ app.post('/download', (req, res) => {
   const cookiesPath = path.join(__dirname, 'cookies.txt');
 
   // yt-dlpコマンドにcookies.txtのパスを渡す
-  const cmd = `./yt-dlp -v --cookies ${cookiesPath} -f bestvideo+bestaudio --merge-output-format mp4 -o videos/sample.mp4 ${url}`;
+  const cmd = `./yt-dlp -v --cookies ${cookiesPath} -f "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 -o videos/sample.mp4 ${url}`;
 
   exec(cmd, (err, stdout, stderr) => {
     if (err) {
