@@ -3,6 +3,10 @@ const bodyParser = require('body-parser');
 const { exec } = require('child_process');
 const app = express();
 const PORT = process.env.PORT || 3000;
+// index.js
+const cors = require('cors');
+app.use(cors()); // これを追加
+
 
 app.use(bodyParser.json());
 app.use('/videos', express.static('videos'));
