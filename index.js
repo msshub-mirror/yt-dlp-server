@@ -1,13 +1,12 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { exec } = require('child_process');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
-// index.js
 const cors = require('cors');
-app.use(cors()); // これを追加
 
-
+app.use(cors()); // CORS対応
 app.use(bodyParser.json());
 app.use('/videos', express.static('videos'));
 
@@ -17,14 +16,17 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'URL is required' });
   }
 
-  const cmd = `./yt-dlp -v --cookies-from-browser chrome -f bestvideo+bestaudio --merge-output-format mp4 -o videos/sample.mp4 ${url}`;
+  // cookies.txtのパスを設定
+  const cookiesPath = path.join(__dirname, 'cookies.txt');
 
+  // yt-dlpコマンドにcookies.txtのパスを渡す
+  const cmd = `./yt-dlp -v --cookies ${cookiesPath} -f bestvideo+bestaudio --merge-output-format mp4 -o videos/sample.mp4 ${url}`;
 
   exec(cmd, (err, stdout, stderr) => {
     if (err) {
-  console.error(stderr);
-  return res.status(500).json({ error: stderr });
-}
+      console.error(stderr);
+      return res.status(500).json({ error: stderr });
+    }
 
     console.log(stdout);
     return res.json({ success: true, videoUrl: '/videos/sample.mp4' });
