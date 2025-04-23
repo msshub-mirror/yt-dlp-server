@@ -14,7 +14,6 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(bodyParser.json());
 
-// 動画フォルダの静的配信とキャッシュ制御
 app.use('/videos', express.static('videos', {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.mp4')) {
@@ -24,7 +23,6 @@ app.use('/videos', express.static('videos', {
   }
 }));
 
-// クライアントごとのWebSocketを保存
 let clients = {};
 
 wss.on('connection', function connection(ws) {
@@ -53,12 +51,23 @@ app.post('/download', (req, res) => {
   const outputPath = `videos/${videoId}.mp4`;
   const cookiesPath = path.join(__dirname, 'cookies.txt');
 
-  // すでに動画が存在する場合は即返す
+  // キャッシュ有効期間（ミリ秒）ここでは1日 = 86400000ms
+  const cacheDuration = 24 * 60 * 60 * 1000;
+
   if (fs.existsSync(outputPath)) {
-    return res.json({ success: true, videoUrl: `/videos/${videoId}.mp4` });
+    const stats = fs.statSync(outputPath);
+    const now = new Date();
+    const fileAge = now - stats.mtime;
+
+    if (fileAge < cacheDuration) {
+      // キャッシュが新しいならそのまま返す
+      return res.json({ success: true, videoUrl: `/videos/${videoId}.mp4` });
+    } else {
+      console.log(`キャッシュは古いため再ダウンロードします: ${videoId}`);
+    }
   }
 
-  // ダウンロード処理
+  // yt-dlpでダウンロード
   const cmd = `./yt-dlp -v --cookies ${cookiesPath} -f "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 -o ${outputPath} ${url}`;
   const child = exec(cmd);
 
@@ -85,7 +94,7 @@ app.post('/download', (req, res) => {
     }
   });
 
-  res.json({ success: true, videoId }); // フロントはWebSocketで進捗受信
+  res.json({ success: true, videoId }); // WebSocketで進捗通知
 });
 
 server.listen(PORT, () => {
