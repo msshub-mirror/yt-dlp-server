@@ -1,108 +1,102 @@
-/* -------------------------------------------------
-   yt-dlp サーバー  (バックエンド)
-   ------------------------------------------------- */
-const express    = require('express');
+const express = require('express');
 const bodyParser = require('body-parser');
-const cors       = require('cors');
-const { exec }   = require('child_process');
-const path       = require('path');
-const WebSocket  = require('ws');
-
-const app  = express();
+const { exec } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const cors = require('cors');
+const WebSocket = require('ws');
+const http = require('http');
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
-/* ---------- 基本ミドルウェア ---------- */
 app.use(cors());
 app.use(bodyParser.json());
-app.use('/videos', express.static(path.join(__dirname, 'videos')));
 
-/* -------------------------------------------------
-   /download  ― 動画を非同期ダウンロード
-   ------------------------------------------------- */
+app.use('/videos', express.static('videos', {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.mp4')) {
+      res.set('Content-Type', 'video/mp4');
+      res.set('Cache-Control', 'no-store');
+    }
+  }
+}));
+
+let clients = {};
+
+wss.on('connection', function connection(ws) {
+  ws.on('message', function incoming(message) {
+    try {
+      const { id } = JSON.parse(message);
+      clients[id] = ws;
+    } catch (e) {
+      console.error('Invalid message received:', message);
+    }
+  });
+});
+
 app.post('/download', (req, res) => {
   const { url } = req.body;
-  if (!url) return res.json({ success: false, error: 'URL is required' });
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
 
-  const id   = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/)[1];
-  const out  = `videos/${id}.%(ext)s`;
+  const idMatch = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/);
+  if (!idMatch) {
+    return res.status(400).json({ error: 'Invalid YouTube URL' });
+  }
 
-  // yt-dlp を非同期で実行
-  const cmd = `yt-dlp --newline -f bestvideo+bestaudio --merge-output-format mp4 -o ${out} ${url}`;
+  const videoId = idMatch[1];
+  const outputPath = `videos/${videoId}.mp4`;
+  const cookiesPath = path.join(__dirname, 'cookies.txt');
 
+  // キャッシュ有効期間（ミリ秒）ここでは1日 = 86400000ms
+  const cacheDuration = 24 * 60 * 60 * 1000;
+
+  if (fs.existsSync(outputPath)) {
+    const stats = fs.statSync(outputPath);
+    const now = new Date();
+    const fileAge = now - stats.mtime;
+
+    if (fileAge < cacheDuration) {
+      // キャッシュが新しいならそのまま返す
+      return res.json({ success: true, videoUrl: `/videos/${videoId}.mp4` });
+    } else {
+      console.log(`キャッシュは古いため再ダウンロードします: ${videoId}`);
+    }
+  }
+
+  // yt-dlpでダウンロード
+  const cmd = `./yt-dlp -v --cookies ${cookiesPath} -f "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 -o ${outputPath} ${url}`;
   const child = exec(cmd);
 
-  /* WebSocket へ進捗を送出 -------------------- */
-  sockets[id]?.forEach(ws => {
-    child.stdout.on('data', line => ws.send(JSON.stringify({ progress: line })));
+  child.stdout.on('data', data => {
+    if (clients[videoId]) {
+      clients[videoId].send(JSON.stringify({ progress: data }));
+    }
+  });
+
+  child.stderr.on('data', data => {
+    if (clients[videoId]) {
+      clients[videoId].send(JSON.stringify({ progress: data }));
+    }
   });
 
   child.on('exit', code => {
-    const success = code === 0;
-    sockets[id]?.forEach(ws => ws.send(JSON.stringify({
-      done   : true,
-      success: success,
-      videoUrl: success ? `/${out.replace(/%\(ext\)s$/, 'mp4')}` : null
-    })));
-    delete sockets[id];
+    if (clients[videoId]) {
+      clients[videoId].send(JSON.stringify({
+        done: true,
+        success: code === 0,
+        videoUrl: `/videos/${videoId}.mp4`
+      }));
+      delete clients[videoId];
+    }
   });
 
-  res.json({ success: true });
+  res.json({ success: true, videoId }); // WebSocketで進捗通知
 });
 
-/* -------------------------------------------------
-   /info  ― メタデータ＋コメント取得
-   ------------------------------------------------- */
-app.post('/info', (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.json({ success: false, error: 'URL is required' });
-
-  // コメントも含め単一 JSON で取得
-  const cmd = `yt-dlp --dump-single-json --skip-download --get-comments --no-playlist "${url}"`;
-
-  exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
-    if (err) return res.json({ success: false, error: stderr });
-
-    let json;
-    try { json = JSON.parse(stdout); }
-    catch (e) { return res.json({ success: false, error: 'JSON parse error' }); }
-
-    /* 必要部分だけ返却 ------------------------ */
-    res.json({
-      success: true,
-      info: {
-        title       : json.title,
-        description : json.description,
-        view_count  : json.view_count,
-        upload_date : json.upload_date,       // yyyymmdd
-        channel     : json.channel,
-        channel_url : json.channel_url,
-        uploader    : json.uploader,
-        subscriber_count: json.subscriber_count,
-        like_count  : json.like_count,
-        comments    : (json.comments || []).slice(0, 20).map(c => ({
-          author   : c.author,
-          text     : c.text,
-          likes    : c.like_count,
-          published: c.time
-        }))
-      }
-    });
-  });
-});
-
-/* ---------- WebSocket サーバー ---------- */
-const server = app.listen(PORT, () =>
-  console.log(`yt-dlp server listening on ${PORT}`));
-
-const wss = new WebSocket.Server({ server });
-const sockets = {};      // { videoId: Set<WebSocket> }
-
-wss.on('connection', ws => {
-  ws.on('message', msg => {
-    const { id } = JSON.parse(msg);
-    sockets[id] = sockets[id] || new Set();
-    sockets[id].add(ws);
-
-    ws.on('close', () => sockets[id]?.delete(ws));
-  });
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
